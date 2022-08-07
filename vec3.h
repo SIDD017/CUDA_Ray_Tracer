@@ -89,7 +89,7 @@ __host__ __device__ inline vec3 operator*(const vec3& u, const vec3& v)
 
 __host__ __device__ inline vec3 operator*(const float t, const vec3& v)
 {
-	return vec3(t - v.e[0], t - v.e[1], t - v.e[2]);
+	return vec3(t * v.e[0], t * v.e[1], t * v.e[2]);
 }
 
 /* Looks similar to the earlier definition of * operator buT this one handles cases when the 
@@ -125,7 +125,7 @@ __host__ __device__ vec3 unit_length(vec3& v)
 }
 
 /* Aliases for vec3. */
-using point = vec3;
+using point3 = vec3;
 using color = vec3;
 
 #endif
