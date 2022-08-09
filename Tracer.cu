@@ -1,5 +1,6 @@
 ﻿#include "cuda_runtime.h"
 #include <device_launch_parameters.h>
+#include <curand_kernel.h>
 
 #include <iostream>
 #include <fstream>
@@ -18,7 +19,7 @@ const char* ppm_filename = "Render.ppm";
 void check_cuda(cudaError_t result, char const *const func, const char *const file, int const line)
 {
 	if (result) {
-		std::cerr << "CUDA error = " << static_cast<unsigned int>(result) << "at" <<
+		std::cerr << "CUDA error = " << static_cast<unsigned int>(result) << " at " <<
 			file << ":" << line << " '" << func << "' \n";
 
 		cudaDeviceReset();
@@ -39,16 +40,17 @@ __device__ color ray_color(const ray& r, hittable **world)
 	return (1.0f - t) * color(1.0f, 1.0f, 1.0f) + t * color(0.5f, 0.7f, 1.0f);
 }
 
-__global__ void create_world(hittable **d_list, hittable**d_world)
+__global__ void create_world(hittable **d_list, hittable **d_world, camera **d_camera)
 {
 	if (threadIdx.x == 0 && threadIdx.x == 0) {
 		*(d_list) = new sphere(vec3(0.0f, 0.0f, -1.0f), 0.5f);
 		*(d_list + 1) = new sphere(vec3(0.0f, -100.5f, -1.0f), 100.0f);
 		*(d_world) = new hittable_list(d_list, 2);
+		*(d_camera) = new camera();
 	}
 }
 
-__global__ void render(vec3 *fb, int max_x, int max_y, vec3 lower_left_corner, vec3 vertical, vec3 horizontal, vec3 origin, hittable** world)
+__global__ void render_init(int max_x, int max_y, curandState *rand_state)
 {
 	int i = threadIdx.x + blockIdx.x * blockDim.x;
 	int j = threadIdx.y + blockIdx.y * blockDim.y;
@@ -59,17 +61,37 @@ __global__ void render(vec3 *fb, int max_x, int max_y, vec3 lower_left_corner, v
 	}
 
 	int pixel_index = j * max_x + i;
-	float u = float(i) / float(max_x);
-	float v = float(j) / float(max_y);
-	ray r(origin, lower_left_corner + u * horizontal + v * vertical);
-	fb[pixel_index] = ray_color(r, world);
+	curand_init(1984, pixel_index, 0, &rand_state[pixel_index]);
 }
 
-__global__ void free_world(hittable** d_list, hittable** d_world)
+__global__ void render(vec3 *fb, int max_x, int max_y, int num_samples, camera **cam, hittable** world, curandState *rand_state)
+{
+	int i = threadIdx.x + blockIdx.x * blockDim.x;
+	int j = threadIdx.y + blockIdx.y * blockDim.y;
+
+	/* Early return if the current thread is not mapped to any pixel in the final render. */
+	if ((i >= max_x) || (j >= max_y)) {
+		return;
+	}
+
+	int pixel_index = j * max_x + i;
+	curandState local_rand_state = rand_state[pixel_index];
+	color pixel_color(0.0f, 0.0f, 0.0f);
+	for (int k = 0; k < num_samples; k++) {
+		float u = float(i + curand_uniform(&local_rand_state)) / float(max_x);
+		float v = float(j + curand_uniform(&local_rand_state)) / float(max_y);
+		ray r = (*cam)->get_ray(u, v);
+		pixel_color += ray_color(r, world);
+	}
+	fb[pixel_index] = pixel_color / float(num_samples);
+}
+
+__global__ void free_world(hittable** d_list, hittable** d_world, camera **d_camera)
 {
 	delete* (d_list);
 	delete* (d_list + 1);
 	delete* (d_world);
+	delete* (d_camera);
 }
 
 int main(void)
@@ -77,21 +99,14 @@ int main(void)
 	/* Image size. */
 	const int nx = 1200, ny = 600;
 	const int num_pixels = nx * ny;
-	const int num_of_samples = 10;
+	const int num_of_samples = 64;
 
 	/* Thread size for dividing work on GPU. */
 	int tx = 8, ty = 8;
 
-	/* Camera properties. */
-	const float viewport_height = 2.0f;
-	const float viewport_width = (nx / ny) * viewport_height;
-	const float focal_length = 1.0f;
-
-	/* Viewport properties. */
-	const vec3 origin = point3(0.0f, 0.0f, 0.0f);
-	const vec3 horizontal = vec3(viewport_width, 0.0f, 0.0f);
-	const vec3 vertical = vec3(0.0f, viewport_height, 0.0f);
-	const vec3 lower_left_corner = origin - (horizontal / 2.0f) - (vertical / 2.0f) - vec3(0.0f, 0.0f, focal_length);
+	/* CUDA random state objects for anti-aliasing in each pixel. */
+	curandState* d_rand_state;
+	checkCudaErrors(cudaMalloc((void **)&d_rand_state, num_pixels * sizeof(curandState)));
 
 	/* NOTE: The d_ prefix here is to denote device only data (GPU only data). */
 
@@ -99,8 +114,10 @@ int main(void)
 	hittable** d_list;
 	checkCudaErrors(cudaMalloc((void**)&d_list, 2*sizeof(hittable *)));
 	hittable** d_world;
-	checkCudaErrors(cudaMalloc((void **)&d_world, sizeof(hittable*)));
-	create_world<<<1, 1 >>> (d_list, d_world);
+	checkCudaErrors(cudaMalloc((void **)&d_world, sizeof(hittable *)));
+	camera** d_camera;
+	checkCudaErrors(cudaMalloc((void **)&d_camera, sizeof(camera *)));
+	create_world<<<1, 1 >>> (d_list, d_world, d_camera);
 	checkCudaErrors(cudaGetLastError());
 	checkCudaErrors(cudaDeviceSynchronize());
 
@@ -116,7 +133,11 @@ int main(void)
 	/* Number of threads per block. */
 	dim3 threads(tx, ty);
 
-	render<<<blocks, threads>>> (fb, nx, ny, lower_left_corner, vertical, horizontal, origin, d_world);
+	render_init<<<blocks, threads >>>(nx, ny, d_rand_state);
+	checkCudaErrors(cudaGetLastError());
+	checkCudaErrors(cudaDeviceSynchronize());
+
+	render<<<blocks, threads>>> (fb, nx, ny, num_of_samples, d_camera, d_world, d_rand_state);
 	checkCudaErrors(cudaGetLastError());
 	checkCudaErrors(cudaDeviceSynchronize());
 
@@ -138,11 +159,13 @@ int main(void)
 	std::cout << "Done writing to output file\n";
 
 	/* Cleanup before terminating application. */
-	free_world<<<1, 1 >>>(d_list, d_world);
+	free_world<<<1, 1 >>>(d_list, d_world, d_camera);
 	checkCudaErrors(cudaDeviceSynchronize());
 	checkCudaErrors(cudaFree(d_list));
 	checkCudaErrors(cudaFree(d_world));
 	checkCudaErrors(cudaFree(fb));
+	checkCudaErrors(cudaFree(d_rand_state));
+	checkCudaErrors(cudaFree(d_camera));
 
 	out_ppm.close();
 
