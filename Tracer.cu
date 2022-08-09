@@ -4,9 +4,11 @@
 #include <iostream>
 #include <fstream>
 
-#include "vec3.h"
+#include "essentials.h"
 #include "color.h"
-#include "ray.h"
+#include "hittable_list.h"
+#include "sphere.h"
+#include "camera.h"
 
 #define checkCudaErrors(val) check_cuda( (val), #val, __FILE__, __LINE__)
 
@@ -24,36 +26,29 @@ void check_cuda(cudaError_t result, char const *const func, const char *const fi
 	}
 }
 
-__device__ float hit_sphere(const point3& center, float radius, const ray& r)
-{
-	vec3 oc = r.origin() - center;
-	float a = dot(r.direction(), r.direction());
-	float b = 2.0f * dot(oc, r.direction());
-	float c = dot(oc, oc) - radius * radius;
-	float discriminant = b * b - 4.0f * a * c;
-	if (discriminant < 0.0f) {
-		return -1.0f;
-	}
-	else {
-		return (-b - sqrt(discriminant)) / (2.0f * a);
-	}
-}
-
 /* Based on the value of the y component in the normalized direction vector of the ray, calculate 
 the final color by interpolating between white and color(0.5f, 0.7f, 1.0f). */
-__device__ color ray_color(const ray& r)
+__device__ color ray_color(const ray& r, hittable **world)
 {
-	float t = hit_sphere(point3(0.0f, 0.0f, -1.0f), 0.5f, r);
-	if (t > 0.0f) {
-		vec3 N = unit_length(r.at(t) - vec3(0.0f, 0.0f, -1.0f));
-		return 0.5f * color(N.x() + 1, N.y() + 1, N.z() + 1);
+	hit_record rec;
+	if ((*world)->hit(r, 0.0f, FLT_MAX, rec)) {
+		return 0.5f * (rec.normal + color(1.0f, 1.0f, 1.0f));
 	}
-	const vec3 unit_direction = unit_length(r.direction());
-	t = 0.5f * (unit_direction.y() + 1.0f);
+	vec3 unit_direction = unit_length(r.direction());
+	float t = 0.5f * (unit_direction.y() + 1.0f);
 	return (1.0f - t) * color(1.0f, 1.0f, 1.0f) + t * color(0.5f, 0.7f, 1.0f);
 }
 
-__global__ void render(vec3 *fb, int max_x, int max_y, vec3 lower_left_corner, vec3 vertical, vec3 horizontal, vec3 origin)
+__global__ void create_world(hittable **d_list, hittable**d_world)
+{
+	if (threadIdx.x == 0 && threadIdx.x == 0) {
+		*(d_list) = new sphere(vec3(0.0f, 0.0f, -1.0f), 0.5f);
+		*(d_list + 1) = new sphere(vec3(0.0f, -100.5f, -1.0f), 100.0f);
+		*(d_world) = new hittable_list(d_list, 2);
+	}
+}
+
+__global__ void render(vec3 *fb, int max_x, int max_y, vec3 lower_left_corner, vec3 vertical, vec3 horizontal, vec3 origin, hittable** world)
 {
 	int i = threadIdx.x + blockIdx.x * blockDim.x;
 	int j = threadIdx.y + blockIdx.y * blockDim.y;
@@ -67,7 +62,14 @@ __global__ void render(vec3 *fb, int max_x, int max_y, vec3 lower_left_corner, v
 	float u = float(i) / float(max_x);
 	float v = float(j) / float(max_y);
 	ray r(origin, lower_left_corner + u * horizontal + v * vertical);
-	fb[pixel_index] = ray_color(r);
+	fb[pixel_index] = ray_color(r, world);
+}
+
+__global__ void free_world(hittable** d_list, hittable** d_world)
+{
+	delete* (d_list);
+	delete* (d_list + 1);
+	delete* (d_world);
 }
 
 int main(void)
@@ -75,6 +77,10 @@ int main(void)
 	/* Image size. */
 	const int nx = 1200, ny = 600;
 	const int num_pixels = nx * ny;
+	const int num_of_samples = 10;
+
+	/* Thread size for dividing work on GPU. */
+	int tx = 8, ty = 8;
 
 	/* Camera properties. */
 	const float viewport_height = 2.0f;
@@ -87,6 +93,17 @@ int main(void)
 	const vec3 vertical = vec3(0.0f, viewport_height, 0.0f);
 	const vec3 lower_left_corner = origin - (horizontal / 2.0f) - (vertical / 2.0f) - vec3(0.0f, 0.0f, focal_length);
 
+	/* NOTE: The d_ prefix here is to denote device only data (GPU only data). */
+
+	/* List of objects that are hittable in our scene. */
+	hittable** d_list;
+	checkCudaErrors(cudaMalloc((void**)&d_list, 2*sizeof(hittable *)));
+	hittable** d_world;
+	checkCudaErrors(cudaMalloc((void **)&d_world, sizeof(hittable*)));
+	create_world<<<1, 1 >>> (d_list, d_world);
+	checkCudaErrors(cudaGetLastError());
+	checkCudaErrors(cudaDeviceSynchronize());
+
 	/* Size of frame buffer in Unified memory to hold final pixel values. */
 	size_t fb_size = num_pixels * sizeof(vec3);
 
@@ -94,15 +111,12 @@ int main(void)
 	vec3* fb;
 	checkCudaErrors(cudaMallocManaged((void **)&fb, fb_size));
 
-	/* Thread size for dividing work on GPU. */
-	int tx = 8, ty = 8;
-
 	/* Number of required blocks. */
 	dim3 blocks(nx/tx+1, ny/ty+1);
 	/* Number of threads per block. */
 	dim3 threads(tx, ty);
 
-	render<<<blocks, threads>>> (fb, nx, ny, lower_left_corner, vertical, horizontal, origin); 
+	render<<<blocks, threads>>> (fb, nx, ny, lower_left_corner, vertical, horizontal, origin, d_world);
 	checkCudaErrors(cudaGetLastError());
 	checkCudaErrors(cudaDeviceSynchronize());
 
@@ -122,9 +136,17 @@ int main(void)
 	}
 
 	std::cout << "Done writing to output file\n";
+
+	/* Cleanup before terminating application. */
+	free_world<<<1, 1 >>>(d_list, d_world);
+	checkCudaErrors(cudaDeviceSynchronize());
+	checkCudaErrors(cudaFree(d_list));
+	checkCudaErrors(cudaFree(d_world));
 	checkCudaErrors(cudaFree(fb));
 
 	out_ppm.close();
+
+	cudaDeviceReset();
 
 	return 0;
 }
