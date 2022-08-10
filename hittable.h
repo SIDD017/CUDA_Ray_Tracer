@@ -5,12 +5,15 @@
 
 #include "ray.h"
 
+class material;
+
 /* For a given ray, this struct hold all the information related to the object the ray hits. */
 struct hit_record 
 {
 	float t;
 	vec3 normal;
 	point3 p;
+	material* mtr;
 	bool front_face;
 
 	__device__ inline void set_face_normal(const ray& r, const vec3& outward_normal) {

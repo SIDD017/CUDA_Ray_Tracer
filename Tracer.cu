@@ -10,6 +10,7 @@
 #include "hittable_list.h"
 #include "sphere.h"
 #include "camera.h"
+#include "material.h"
 
 #define checkCudaErrors(val) check_cuda( (val), #val, __FILE__, __LINE__)
 
@@ -27,43 +28,24 @@ void check_cuda(cudaError_t result, char const *const func, const char *const fi
 	}
 }
 
-__device__ vec3 random_in_unit_sphere(curandState *local_rand_state)
-{
-	while (true) {
-		float rand_x = (curand_uniform(local_rand_state) * 2) - 1;
-		float rand_y = (curand_uniform(local_rand_state) * 2) - 1;
-		float rand_z = (curand_uniform(local_rand_state) * 2) - 1;
-		vec3 p = vec3(rand_x, rand_y, rand_z);
-		if (p.length_squared() >= 1.0f) {
-			continue;
-		}
-		return p;
-	}
-}
-
-__device__ vec3 random_in_hemisphere(const vec3& normal, curandState* local_rand_state) {
-	vec3 in_unit_sphere = random_in_unit_sphere(local_rand_state);
-	/* In the same hemisphere as the normal */
-	if (dot(in_unit_sphere, normal) > 0.0f) {
-		return in_unit_sphere;
-	}
-	else {
-		return -in_unit_sphere;
-	}
-}
-
 /* Based on the value of the y component in the normalized direction vector of the ray, calculate 
 the final color by interpolating between white and color(0.5f, 0.7f, 1.0f). */
 __device__ color ray_color(const ray& r, hittable **world, curandState *rand_state)
 {
 	ray curr_ray = r;
-	float curr_attenuation = 1.0f;
+	color curr_attenuation(1.0f, 1.0f, 1.0f);
 	for (int i = 0; i < 50; i++) {
 		hit_record rec;
 		if ((*world)->hit(curr_ray, 0.001f, FLT_MAX, rec)) {
-			vec3 target = rec.p + rec.normal + random_in_hemisphere(rec.normal, rand_state);
-			curr_attenuation *= 0.5f;
-			curr_ray = ray(rec.p, target - rec.p);
+			ray scattered;
+			color attenuation;
+			if (rec.mtr->scatter(curr_ray, rec, attenuation, scattered, rand_state)) {
+				curr_attenuation *= attenuation;
+				curr_ray = scattered;
+			}
+			else {
+				return color(0.0f, 0.0f, 0.0f);
+			}
 		}
 		else {
 			vec3 unit_direction = unit_length(curr_ray.direction());
@@ -73,16 +55,6 @@ __device__ color ray_color(const ray& r, hittable **world, curandState *rand_sta
 		}
 	}
 	return vec3(0.0f, 0.0f, 0.0f);
-}
-
-__global__ void create_world(hittable **d_list, hittable **d_world, camera **d_camera)
-{
-	if (threadIdx.x == 0 && threadIdx.x == 0) {
-		*(d_list) = new sphere(vec3(0.0f, 0.0f, -1.0f), 0.5f);
-		*(d_list + 1) = new sphere(vec3(0.0f, -100.5f, -1.0f), 100.0f);
-		*(d_world) = new hittable_list(d_list, 2);
-		*(d_camera) = new camera();
-	}
 }
 
 __global__ void render_init(int max_x, int max_y, curandState *rand_state)
@@ -122,10 +94,32 @@ __global__ void render(vec3 *fb, int max_x, int max_y, int num_samples, camera *
 	fb[pixel_index] = pixel_color / float(num_samples);
 }
 
-__global__ void free_world(hittable** d_list, hittable** d_world, camera **d_camera)
+__global__ void create_world(hittable** d_list, hittable** d_world, camera** d_camera, material** d_material)
+{
+	if (threadIdx.x == 0 && threadIdx.x == 0) {
+		*(d_material) = new lambertian(color(0.8f, 0.8f, 0.0f));
+		*(d_material + 1) = new lambertian(color(0.7f, 0.3f, 0.3f));
+		*(d_material + 2) = new metal(color(0.8f, 0.8f, 0.8f), 0.3f);
+		*(d_material + 3) = new metal(color(0.8f, 0.6f, 0.2f), 1.0f);
+		*(d_list) = new sphere(vec3(0.0f, -100.5f, -1.0f), 100.0f, *(d_material));
+		*(d_list + 1) = new sphere(vec3(0.0f, 0.0f, -1.0f), 0.5f, *(d_material + 1));
+		*(d_list + 2) = new sphere(vec3(-1.0f, 0.0f, -1.0f), 0.5f, *(d_material + 2));
+		*(d_list + 3) = new sphere(vec3(1.0f, 0.0f, -1.0f), 0.5f, *(d_material + 3));
+		*(d_world) = new hittable_list(d_list, 4);
+		*(d_camera) = new camera();
+	}
+}
+
+__global__ void free_world(hittable** d_list, hittable** d_world, camera **d_camera, material **d_material)
 {
 	delete* (d_list);
 	delete* (d_list + 1);
+	delete* (d_list + 2);
+	delete* (d_list + 3);
+	delete* (d_material);
+	delete* (d_material + 1);
+	delete* (d_material + 2);
+	delete* (d_material + 3);
 	delete* (d_world);
 	delete* (d_camera);
 }
@@ -146,14 +140,18 @@ int main(void)
 
 	/* NOTE: The d_ prefix here is to denote device only data (GPU only data). */
 
+	/* List of materials inlcuded in our scene. */
+	material** d_material;
+	checkCudaErrors(cudaMalloc((void **)&d_material, 4 * sizeof(material*)));
+
 	/* List of objects that are hittable in our scene. */
 	hittable** d_list;
-	checkCudaErrors(cudaMalloc((void**)&d_list, 2*sizeof(hittable *)));
+	checkCudaErrors(cudaMalloc((void**)&d_list, 4*sizeof(hittable *)));
 	hittable** d_world;
 	checkCudaErrors(cudaMalloc((void **)&d_world, sizeof(hittable *)));
 	camera** d_camera;
 	checkCudaErrors(cudaMalloc((void **)&d_camera, sizeof(camera *)));
-	create_world<<<1, 1 >>> (d_list, d_world, d_camera);
+	create_world<<<1, 1 >>> (d_list, d_world, d_camera, d_material);
 	checkCudaErrors(cudaGetLastError());
 	checkCudaErrors(cudaDeviceSynchronize());
 
@@ -195,7 +193,7 @@ int main(void)
 	std::cout << "Done writing to output file\n";
 
 	/* Cleanup before terminating application. */
-	free_world<<<1, 1 >>>(d_list, d_world, d_camera);
+	free_world<<<1, 1 >>>(d_list, d_world, d_camera, d_material);
 	checkCudaErrors(cudaDeviceSynchronize());
 	checkCudaErrors(cudaFree(d_list));
 	checkCudaErrors(cudaFree(d_world));
