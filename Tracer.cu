@@ -87,7 +87,7 @@ __global__ void render(vec3 *fb, int max_x, int max_y, int num_samples, camera *
 	for (int k = 0; k < num_samples; k++) {
 		float u = float(i + curand_uniform(&local_rand_state)) / float(max_x);
 		float v = float(j + curand_uniform(&local_rand_state)) / float(max_y);
-		ray r = (*cam)->get_ray(u, v);
+		ray r = (*cam)->get_ray(u, v, local_rand_state);
 		pixel_color += ray_color(r, world, &local_rand_state);
 	}
 	rand_state[pixel_index] = local_rand_state;
@@ -97,6 +97,13 @@ __global__ void render(vec3 *fb, int max_x, int max_y, int num_samples, camera *
 __global__ void create_world(hittable** d_list, hittable** d_world, camera** d_camera, material** d_material)
 {
 	if (threadIdx.x == 0 && threadIdx.x == 0) {
+
+		point3 lookfrom(3.0f, 3.0f, 2.0f);
+		point3 lookat(0.0f, 0.0f, -1.0f);
+		vec3 vup(0.0f, 1.0f, 0.0f);
+		float dist_to_focus = (lookfrom - lookat).length();
+		float aperture = 2.0f;
+
 		*(d_material) = new lambertian(color(0.8f, 0.8f, 0.0f));
 		*(d_material + 1) = new lambertian(color(0.1, 0.2, 0.5));
 		*(d_material + 2) = new dielectric(2.5f);
@@ -106,7 +113,7 @@ __global__ void create_world(hittable** d_list, hittable** d_world, camera** d_c
 		*(d_list + 2) = new sphere(vec3(-1.0f, 0.0f, -1.0f), 0.5f, *(d_material + 2));
 		*(d_list + 3) = new sphere(vec3(1.0f, 0.0f, -1.0f), 0.5f, *(d_material + 3));
 		*(d_world) = new hittable_list(d_list, 4);
-		*(d_camera) = new camera(point3(-2.0f, 2.0f, 1.0f), point3(0.0f, 0.0f, -1.0f), vec3(0.0f, 1.0f, 0.0f), 20.0f, (float)(16.0f / 9.0f));
+		*(d_camera) = new camera(lookfrom, lookat, vup, 20.0f, (float)(16.0f / 9.0f), aperture, dist_to_focus);
 	}
 }
 
