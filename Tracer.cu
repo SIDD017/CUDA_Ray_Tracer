@@ -106,7 +106,7 @@ __global__ void create_world(hittable** d_list, hittable** d_world, camera** d_c
 		*(d_list + 2) = new sphere(vec3(-1.0f, 0.0f, -1.0f), 0.5f, *(d_material + 2));
 		*(d_list + 3) = new sphere(vec3(1.0f, 0.0f, -1.0f), 0.5f, *(d_material + 3));
 		*(d_world) = new hittable_list(d_list, 4);
-		*(d_camera) = new camera();
+		*(d_camera) = new camera(point3(-2.0f, 2.0f, 1.0f), point3(0.0f, 0.0f, -1.0f), vec3(0.0f, 1.0f, 0.0f), 20.0f, (float)(16.0f / 9.0f));
 	}
 }
 
@@ -129,7 +129,7 @@ int main(void)
 	/* Image size. */
 	const int nx = 1200, ny = 600;
 	const int num_pixels = nx * ny;
-	const int num_of_samples = 320;
+	const int num_of_samples = 32;
 
 	/* Thread size for dividing work on GPU. */
 	int tx = 8, ty = 8;

@@ -19,7 +19,8 @@ const float pi = 3.1415926535897932385f;
 /* Utility Functions. */
 __device__ inline float degrees_to_radians(float degrees)
 {
-	return degrees * pi / 180.0f;
+	float d_pi = 3.1415926535897932385f;
+	return degrees * d_pi / 180.0f;
 }
 
 /* Common Headers. */

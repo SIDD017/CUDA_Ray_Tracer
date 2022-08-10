@@ -9,25 +9,32 @@
 class camera
 {
 public:
-	__device__ camera()
+	__device__ camera(point3 lookfrom, point3 lookat, vec3 vup, float vfov, float aspect_ratio)
 	{
-		float aspect_ratio = 16.0f / 9.0f;
-		float viewport_height = 2.0f;
+		float theta = degrees_to_radians(vfov);
+		float h = tan(theta / 2.0f);
+		float viewport_height = 2.0f * h;
 		float viewport_width = aspect_ratio * viewport_height;
+
+		vec3 w = unit_length(lookfrom - lookat);
+		vec3 u = unit_length(cross(vup, w));
+		vec3 v = cross(w, u);
+
 		float focal_length = 1.0f;
 
-		origin = point3(0.0f, 0.0f, 0.0f);
-		horizontal = vec3(viewport_width, 0.0f, 0.0f);
-		vertical = vec3(0.0f, viewport_height, 0.0f);
-		lower_left_corner = origin - vec3(0.0f, 0.0f, focal_length) - (horizontal / 2.0f) - (vertical / 2.0f);
+		origin = lookfrom;
+		horizontal = viewport_width * u;
+		vertical = viewport_height * v;
+		lower_left_corner = origin - w - (horizontal / 2.0f) - (vertical / 2.0f);
 
 	}
 
-	__device__ ray get_ray(float u, float v)
+	__device__ ray get_ray(float s, float t)
 	{
-		return ray(origin, lower_left_corner + u * horizontal + v * vertical - origin);
+		return ray(origin, lower_left_corner + s * horizontal + t * vertical - origin);
 	}
 
+private:
 	point3 origin;
 	point3 lower_left_corner;
 	vec3 horizontal;
