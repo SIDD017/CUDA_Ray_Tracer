@@ -94,39 +94,86 @@ __global__ void render(vec3 *fb, int max_x, int max_y, int num_samples, camera *
 	fb[pixel_index] = pixel_color / float(num_samples);
 }
 
-__global__ void create_world(hittable** d_list, hittable** d_world, camera** d_camera, material** d_material)
+__global__ void rand_init(curandState* rand_state)
+{
+	if (threadIdx.x == 0 && blockIdx.x == 0) {
+		curand_init(1984, 0, 0, rand_state);
+	}
+}
+
+#define RND (curand_uniform(&local_rand_state))
+
+__device__ void random_scene(hittable **d_list, hittable **d_world, material **d_material, curandState *rand_state)
+{
+	curandState local_rand_state = *rand_state;
+	
+	/* Ground material and sphere. */
+	*(d_material) = new lambertian(color(0.5f, 0.5f, 0.5f));
+	*(d_list) = new sphere(vec3(0.0f, -1000.0f, 0.0f), 1000.0f, *(d_material));
+
+	/* 3 large spheres. One lambertian, one metal and one dielectric. */
+	*(d_material + 1) = new lambertian(color(0.4f, 0.2f, 0.1f));
+	*(d_material + 2) = new dielectric(1.5f);
+	*(d_material + 3) = new metal(color(0.7f, 0.6f, 0.5f), 0.0f);
+	*(d_list + 1) = new sphere(vec3(-4.0f, 1.0f, 0.0f), 1.0f, *(d_material + 1));
+	*(d_list + 2) = new sphere(vec3(0.0f, 1.0f, 0.0f), 1.0f, *(d_material + 2));
+	*(d_list + 3) = new sphere(vec3(4.0f, 1.0f, 0.0f), 1.0f, *(d_material + 3));
+
+	int i = 4;
+	for (int a = -11; a < 11; a++) {
+		for (int b = -11; b < 11; b++) {
+			float choose_mat = RND;
+			point3 center(a + RND, 0.2f, b + RND);
+
+			if (choose_mat < 0.8f) {
+				/* Diffuse. */
+				color albedo(RND * RND, RND * RND, RND * RND);
+				*(d_material + i) = new lambertian(albedo);
+				*(d_list + i) = new sphere(center, 0.2f, *(d_material + i));
+				i++;
+			}
+			else if (choose_mat < 0.95f) {
+				/* Metal. */
+				color albedo(0.5f * (1.0f + RND), 0.5f * (1.0f + RND), 0.5f * (1.0f + RND));
+				float fuzz = 0.5f * (1.0f + RND);
+				*(d_material + i) = new metal(albedo, fuzz);
+				*(d_list + i) = new sphere(center, 0.2f, *(d_material + i));
+				i++;
+			}
+			else {
+				/* Glass. */
+				*(d_material + i) = new dielectric(1.5f);
+				*(d_list + i) = new sphere(center, 0.2f, *(d_material + i));
+				i++;
+			}
+		}
+	}
+
+}
+
+__global__ void create_world(hittable** d_list, hittable** d_world, camera** d_camera, material** d_material, curandState *rand_state, int num_of_objs)
 {
 	if (threadIdx.x == 0 && threadIdx.x == 0) {
 
-		point3 lookfrom(3.0f, 3.0f, 2.0f);
-		point3 lookat(0.0f, 0.0f, -1.0f);
+		point3 lookfrom(13.0f, 2.0f, 3.0f);
+		point3 lookat(0.0f, 0.0f, 0.0f);
 		vec3 vup(0.0f, 1.0f, 0.0f);
-		float dist_to_focus = (lookfrom - lookat).length();
-		float aperture = 2.0f;
+		float dist_to_focus = 10.0f;
+		float aperture = 0.1f;
 
-		*(d_material) = new lambertian(color(0.8f, 0.8f, 0.0f));
-		*(d_material + 1) = new lambertian(color(0.1, 0.2, 0.5));
-		*(d_material + 2) = new dielectric(2.5f);
-		*(d_material + 3) = new metal(color(0.8f, 0.6f, 0.2f), 1.0f);
-		*(d_list) = new sphere(vec3(0.0f, -100.5f, -1.0f), 100.0f, *(d_material));
-		*(d_list + 1) = new sphere(vec3(0.0f, 0.0f, -1.0f), 0.5f, *(d_material + 1));
-		*(d_list + 2) = new sphere(vec3(-1.0f, 0.0f, -1.0f), 0.5f, *(d_material + 2));
-		*(d_list + 3) = new sphere(vec3(1.0f, 0.0f, -1.0f), 0.5f, *(d_material + 3));
-		*(d_world) = new hittable_list(d_list, 4);
-		*(d_camera) = new camera(lookfrom, lookat, vup, 20.0f, (float)(16.0f / 9.0f), aperture, dist_to_focus);
+		random_scene(d_list, d_world, d_material, rand_state);
+		*(d_world) = new hittable_list(d_list, num_of_objs);
+		*(d_camera) = new camera(lookfrom, lookat, vup, 20.0f, (float)(3.0f / 2.0f), aperture, dist_to_focus);
 	}
 }
 
 __global__ void free_world(hittable** d_list, hittable** d_world, camera **d_camera, material **d_material)
 {
-	delete* (d_list);
-	delete* (d_list + 1);
-	delete* (d_list + 2);
-	delete* (d_list + 3);
-	delete* (d_material);
-	delete* (d_material + 1);
-	delete* (d_material + 2);
-	delete* (d_material + 3);
+	for (int i = 0; i < (22 * 22 + 1 + 3); i++) {
+		delete* (d_list + i);
+		delete* (d_material + i);
+	}
+	
 	delete* (d_world);
 	delete* (d_camera);
 }
@@ -134,9 +181,9 @@ __global__ void free_world(hittable** d_list, hittable** d_world, camera **d_cam
 int main(void)
 {
 	/* Image size. */
-	const int nx = 1200, ny = 600;
+	const int nx = 1200, ny = 800;
 	const int num_pixels = nx * ny;
-	const int num_of_samples = 32;
+	const int num_of_samples = 2;
 
 	/* Thread size for dividing work on GPU. */
 	int tx = 8, ty = 8;
@@ -144,21 +191,29 @@ int main(void)
 	/* CUDA random state objects for anti-aliasing in each pixel. */
 	curandState* d_rand_state;
 	checkCudaErrors(cudaMalloc((void **)&d_rand_state, num_pixels * sizeof(curandState)));
+	curandState* d_objs_rand_state;
+	checkCudaErrors(cudaMalloc((void**)&d_objs_rand_state, 1 * sizeof(curandState)));
+
+	/* Initialize d_objs_rand_state fro world creation. */
+	rand_init<<<1, 1 >>>(d_objs_rand_state);
+	checkCudaErrors(cudaGetLastError());
+	checkCudaErrors(cudaDeviceSynchronize());
 
 	/* NOTE: The d_ prefix here is to denote device only data (GPU only data). */
 
+	int num_of_objs = 22 * 22 + 1 + 3;
 	/* List of materials inlcuded in our scene. */
 	material** d_material;
-	checkCudaErrors(cudaMalloc((void **)&d_material, 4 * sizeof(material*)));
+	checkCudaErrors(cudaMalloc((void **)&d_material, num_of_objs * sizeof(material*)));
 
 	/* List of objects that are hittable in our scene. */
 	hittable** d_list;
-	checkCudaErrors(cudaMalloc((void**)&d_list, 4*sizeof(hittable *)));
+	checkCudaErrors(cudaMalloc((void**)&d_list, num_of_objs * sizeof(hittable *)));
 	hittable** d_world;
 	checkCudaErrors(cudaMalloc((void **)&d_world, sizeof(hittable *)));
 	camera** d_camera;
 	checkCudaErrors(cudaMalloc((void **)&d_camera, sizeof(camera *)));
-	create_world<<<1, 1 >>> (d_list, d_world, d_camera, d_material);
+	create_world<<<1, 1 >>> (d_list, d_world, d_camera, d_material, d_objs_rand_state, num_of_objs);
 	checkCudaErrors(cudaGetLastError());
 	checkCudaErrors(cudaDeviceSynchronize());
 
@@ -206,6 +261,7 @@ int main(void)
 	checkCudaErrors(cudaFree(d_world));
 	checkCudaErrors(cudaFree(fb));
 	checkCudaErrors(cudaFree(d_rand_state));
+	checkCudaErrors(cudaFree(d_objs_rand_state));
 	checkCudaErrors(cudaFree(d_camera));
 
 	out_ppm.close();
