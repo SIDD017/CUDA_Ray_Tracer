@@ -27,17 +27,52 @@ void check_cuda(cudaError_t result, char const *const func, const char *const fi
 	}
 }
 
+__device__ vec3 random_in_unit_sphere(curandState *local_rand_state)
+{
+	while (true) {
+		float rand_x = (curand_uniform(local_rand_state) * 2) - 1;
+		float rand_y = (curand_uniform(local_rand_state) * 2) - 1;
+		float rand_z = (curand_uniform(local_rand_state) * 2) - 1;
+		vec3 p = vec3(rand_x, rand_y, rand_z);
+		if (p.length_squared() >= 1.0f) {
+			continue;
+		}
+		return p;
+	}
+}
+
+__device__ vec3 random_in_hemisphere(const vec3& normal, curandState* local_rand_state) {
+	vec3 in_unit_sphere = random_in_unit_sphere(local_rand_state);
+	/* In the same hemisphere as the normal */
+	if (dot(in_unit_sphere, normal) > 0.0f) {
+		return in_unit_sphere;
+	}
+	else {
+		return -in_unit_sphere;
+	}
+}
+
 /* Based on the value of the y component in the normalized direction vector of the ray, calculate 
 the final color by interpolating between white and color(0.5f, 0.7f, 1.0f). */
-__device__ color ray_color(const ray& r, hittable **world)
+__device__ color ray_color(const ray& r, hittable **world, curandState *rand_state)
 {
-	hit_record rec;
-	if ((*world)->hit(r, 0.0f, FLT_MAX, rec)) {
-		return 0.5f * (rec.normal + color(1.0f, 1.0f, 1.0f));
+	ray curr_ray = r;
+	float curr_attenuation = 1.0f;
+	for (int i = 0; i < 50; i++) {
+		hit_record rec;
+		if ((*world)->hit(curr_ray, 0.001f, FLT_MAX, rec)) {
+			vec3 target = rec.p + rec.normal + random_in_hemisphere(rec.normal, rand_state);
+			curr_attenuation *= 0.5f;
+			curr_ray = ray(rec.p, target - rec.p);
+		}
+		else {
+			vec3 unit_direction = unit_length(curr_ray.direction());
+			float t = 0.5f * (unit_direction.y() + 1.0f);
+			vec3 c = (1.0f - t) * color(1.0f, 1.0f, 1.0f) + t * color(0.5f, 0.7f, 1.0f);
+			return curr_attenuation * c;
+		}
 	}
-	vec3 unit_direction = unit_length(r.direction());
-	float t = 0.5f * (unit_direction.y() + 1.0f);
-	return (1.0f - t) * color(1.0f, 1.0f, 1.0f) + t * color(0.5f, 0.7f, 1.0f);
+	return vec3(0.0f, 0.0f, 0.0f);
 }
 
 __global__ void create_world(hittable **d_list, hittable **d_world, camera **d_camera)
@@ -81,8 +116,9 @@ __global__ void render(vec3 *fb, int max_x, int max_y, int num_samples, camera *
 		float u = float(i + curand_uniform(&local_rand_state)) / float(max_x);
 		float v = float(j + curand_uniform(&local_rand_state)) / float(max_y);
 		ray r = (*cam)->get_ray(u, v);
-		pixel_color += ray_color(r, world);
+		pixel_color += ray_color(r, world, &local_rand_state);
 	}
+	rand_state[pixel_index] = local_rand_state;
 	fb[pixel_index] = pixel_color / float(num_samples);
 }
 
@@ -99,7 +135,7 @@ int main(void)
 	/* Image size. */
 	const int nx = 1200, ny = 600;
 	const int num_pixels = nx * ny;
-	const int num_of_samples = 64;
+	const int num_of_samples = 32;
 
 	/* Thread size for dividing work on GPU. */
 	int tx = 8, ty = 8;
