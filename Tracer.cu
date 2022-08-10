@@ -98,8 +98,8 @@ __global__ void create_world(hittable** d_list, hittable** d_world, camera** d_c
 {
 	if (threadIdx.x == 0 && threadIdx.x == 0) {
 		*(d_material) = new lambertian(color(0.8f, 0.8f, 0.0f));
-		*(d_material + 1) = new lambertian(color(0.7f, 0.3f, 0.3f));
-		*(d_material + 2) = new metal(color(0.8f, 0.8f, 0.8f), 0.3f);
+		*(d_material + 1) = new lambertian(color(0.1, 0.2, 0.5));
+		*(d_material + 2) = new dielectric(2.5f);
 		*(d_material + 3) = new metal(color(0.8f, 0.6f, 0.2f), 1.0f);
 		*(d_list) = new sphere(vec3(0.0f, -100.5f, -1.0f), 100.0f, *(d_material));
 		*(d_list + 1) = new sphere(vec3(0.0f, 0.0f, -1.0f), 0.5f, *(d_material + 1));
@@ -129,7 +129,7 @@ int main(void)
 	/* Image size. */
 	const int nx = 1200, ny = 600;
 	const int num_pixels = nx * ny;
-	const int num_of_samples = 32;
+	const int num_of_samples = 320;
 
 	/* Thread size for dividing work on GPU. */
 	int tx = 8, ty = 8;
