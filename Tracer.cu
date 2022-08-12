@@ -152,7 +152,7 @@ __device__ void random_scene(hittable **d_list, hittable **d_world, material **d
 
 }
 
-__global__ void create_world(hittable** d_list, hittable** d_world, camera** d_camera, material** d_material, curandState *rand_state, int num_of_objs)
+__global__ void create_world(hittable** d_list, hittable** d_world, camera** d_camera, material** d_material, curandState *rand_state, int num_of_objs, const float aspect_ratio)
 {
 	if (threadIdx.x == 0 && threadIdx.x == 0) {
 
@@ -164,7 +164,7 @@ __global__ void create_world(hittable** d_list, hittable** d_world, camera** d_c
 
 		random_scene(d_list, d_world, d_material, rand_state);
 		*(d_world) = new hittable_list(d_list, num_of_objs);
-		*(d_camera) = new camera(lookfrom, lookat, vup, 20.0f, (float)(16.0f / 9.0f), aperture, dist_to_focus, 0.0f, 1.0f);
+		*(d_camera) = new camera(lookfrom, lookat, vup, 20.0f, aspect_ratio, aperture, dist_to_focus, 0.0f, 1.0f);
 	}
 }
 
@@ -183,6 +183,7 @@ int main(void)
 {
 	/* Image size. */
 	const int nx = 400, ny = 225;
+	const float aspect_ratio = float(nx) / float(ny);
 	const int num_pixels = nx * ny;
 	const int num_of_samples = 32;
 
@@ -195,7 +196,7 @@ int main(void)
 	curandState* d_objs_rand_state;
 	checkCudaErrors(cudaMalloc((void**)&d_objs_rand_state, 1 * sizeof(curandState)));
 
-	/* Initialize d_objs_rand_state fro world creation. */
+	/* Initialize d_objs_rand_state from world creation. */
 	rand_init<<<1, 1 >>>(d_objs_rand_state);
 	checkCudaErrors(cudaGetLastError());
 	checkCudaErrors(cudaDeviceSynchronize());
@@ -214,7 +215,7 @@ int main(void)
 	checkCudaErrors(cudaMalloc((void **)&d_world, sizeof(hittable *)));
 	camera** d_camera;
 	checkCudaErrors(cudaMalloc((void **)&d_camera, sizeof(camera *)));
-	create_world<<<1, 1 >>> (d_list, d_world, d_camera, d_material, d_objs_rand_state, num_of_objs);
+	create_world<<<1, 1 >>> (d_list, d_world, d_camera, d_material, d_objs_rand_state, num_of_objs, aspect_ratio);
 	checkCudaErrors(cudaGetLastError());
 	checkCudaErrors(cudaDeviceSynchronize());
 
