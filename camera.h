@@ -20,7 +20,16 @@ __device__ vec3 random_in_unit_disk(curandState rand_state)
 class camera
 {
 public:
-	__device__ camera(point3 lookfrom, point3 lookat, vec3 vup, float vfov, float aspect_ratio, float aperture, float focus_dist)
+	__device__ camera(
+		point3 lookfrom, 
+		point3 lookat, 
+		vec3 vup, 
+		float vfov, 
+		float aspect_ratio, 
+		float aperture, 
+		float focus_dist, 
+		float _time0 = 0,
+		float _time1 = 0)
 	{
 		float theta = degrees_to_radians(vfov);
 		float h = tan(theta / 2.0f);
@@ -39,6 +48,8 @@ public:
 		lower_left_corner = origin - (horizontal / 2.0f) - (vertical / 2.0f) - focus_dist * w;
 
 		lens_radius = aperture / 2.0f;
+		time0 = _time0;
+		time1 = _time1;
 	}
 
 	__device__ ray get_ray(float s, float t, curandState rand_state)
@@ -46,7 +57,11 @@ public:
 		vec3 rd = lens_radius * random_in_unit_disk(rand_state);
 		vec3 offset = u * rd.x() + v * rd.y();
 
-		return ray(origin + offset, lower_left_corner + s * horizontal + t * vertical - origin - offset);
+		float time = time0 + (curand_uniform(&rand_state) * (time1 - time0));
+
+		return ray(origin + offset,
+			lower_left_corner + s * horizontal + t * vertical - origin - offset,
+			time);
 	}
 
 private:
@@ -56,6 +71,8 @@ private:
 	vec3 vertical;
 	vec3 u, v, w;
 	float lens_radius;
+	/* Shutter open/close times. */
+	float time0, time1;
 };
 
 #endif

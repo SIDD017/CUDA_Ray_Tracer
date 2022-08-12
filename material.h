@@ -17,8 +17,8 @@ public:
 __device__ vec3 random_in_unit_sphere(curandState* local_rand_state)
 {
 	/* When using #random_in_unit_sphere() instead of #random_in_hemisphere(), the result might
-	become NaN or infinite due to the randome vector pointing opposite to the normal. To avoid
-	this, check for a cases where the result is cloase to 0.0f and just change the value to the
+	become NaN or infinite due to the random vector pointing opposite to the normal. To avoid
+	this, check for a cases where the result is close to 0.0f and just change the value to the
 	normal vector instead. */
 	while (true) {
 		float rand_x = (curand_uniform(local_rand_state) * 2) - 1;
@@ -54,7 +54,7 @@ public:
 	__device__ virtual bool scatter(const ray& r_in, const hit_record& rec, color& attenuation, ray& scattered, curandState *rand_state) const override
 	{
 		vec3 scatter_direction = rec.normal + random_in_hemisphere(rec.normal, rand_state);
-		scattered = ray(rec.p, scatter_direction);
+		scattered = ray(rec.p, scatter_direction, r_in.time());
 		attenuation = albedo;
 		return true;
 	}
@@ -74,7 +74,7 @@ public:
 	__device__ virtual bool scatter(const ray& r_in, const hit_record& rec, color& attenuation, ray& scattered, curandState *rand_state) const override
 	{
 		vec3 reflected = reflect(unit_length(r_in.direction()), rec.normal);
-		scattered = ray(rec.p, reflected + fuzz * random_in_unit_sphere(rand_state));
+		scattered = ray(rec.p, reflected + fuzz * random_in_unit_sphere(rand_state), r_in.time());
 		attenuation = albedo;
 		return (dot(scattered.direction(), rec.normal) > 0);
 	}
@@ -110,7 +110,7 @@ public:
 			direction = refract(unit_direction, rec.normal, refraction_ratio);
 		}
 
-		scattered = ray(rec.p, direction);
+		scattered = ray(rec.p, direction, r_in.time());
 		return true;
 	}
 

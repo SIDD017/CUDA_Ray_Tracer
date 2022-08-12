@@ -129,7 +129,8 @@ __device__ void random_scene(hittable **d_list, hittable **d_world, material **d
 				/* Diffuse. */
 				color albedo(RND * RND, RND * RND, RND * RND);
 				*(d_material + i) = new lambertian(albedo);
-				*(d_list + i) = new sphere(center, 0.2f, *(d_material + i));
+				vec3 center2 = center + vec3(0.0f, RND * 0.5f, 0.0f);
+				*(d_list + i) = new moving_sphere(center, center2, 0.0f, 1.0f, 0.2f, *(d_material + i));
 				i++;
 			}
 			else if (choose_mat < 0.95f) {
@@ -163,7 +164,7 @@ __global__ void create_world(hittable** d_list, hittable** d_world, camera** d_c
 
 		random_scene(d_list, d_world, d_material, rand_state);
 		*(d_world) = new hittable_list(d_list, num_of_objs);
-		*(d_camera) = new camera(lookfrom, lookat, vup, 20.0f, (float)(3.0f / 2.0f), aperture, dist_to_focus);
+		*(d_camera) = new camera(lookfrom, lookat, vup, 20.0f, (float)(16.0f / 9.0f), aperture, dist_to_focus, 0.0f, 1.0f);
 	}
 }
 
@@ -181,9 +182,9 @@ __global__ void free_world(hittable** d_list, hittable** d_world, camera **d_cam
 int main(void)
 {
 	/* Image size. */
-	const int nx = 1200, ny = 800;
+	const int nx = 400, ny = 225;
 	const int num_pixels = nx * ny;
-	const int num_of_samples = 2;
+	const int num_of_samples = 32;
 
 	/* Thread size for dividing work on GPU. */
 	int tx = 8, ty = 8;
