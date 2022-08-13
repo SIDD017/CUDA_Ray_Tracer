@@ -92,6 +92,7 @@ __global__ void render(vec3 *fb, int max_x, int max_y, int num_samples, camera *
 	}
 	rand_state[pixel_index] = local_rand_state;
 	fb[pixel_index] = pixel_color / float(num_samples);
+	//printf("DONE::PIXEL_INDEX::(%d, %d)\n", i, j);
 }
 
 __global__ void rand_init(curandState* rand_state)
@@ -124,7 +125,6 @@ __device__ void random_scene(hittable **d_list, hittable **d_world, material **d
 		for (int b = -11; b < 11; b++) {
 			float choose_mat = RND;
 			point3 center(a + RND, 0.2f, b + RND);
-
 			if (choose_mat < 0.8f) {
 				/* Diffuse. */
 				color albedo(RND * RND, RND * RND, RND * RND);
@@ -182,13 +182,13 @@ __global__ void free_world(hittable** d_list, hittable** d_world, camera **d_cam
 int main(void)
 {
 	/* Image size. */
-	const int nx = 400, ny = 225;
+	const int nx = 400, ny = 320;
 	const float aspect_ratio = float(nx) / float(ny);
 	const int num_pixels = nx * ny;
-	const int num_of_samples = 32;
+	const int num_of_samples = 2;
 
 	/* Thread size for dividing work on GPU. */
-	int tx = 8, ty = 8;
+	int tx = 32, ty = 32;
 
 	/* CUDA random state objects for anti-aliasing in each pixel. */
 	curandState* d_rand_state;

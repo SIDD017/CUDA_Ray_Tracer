@@ -114,7 +114,7 @@ public:
 		return true;
 	}
 
-	double ir;
+	float ir;
 
 private:
 	__device__ static float reflectance(float cosine, float ref_index)

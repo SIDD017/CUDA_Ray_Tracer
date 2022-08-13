@@ -28,8 +28,8 @@ public:
 		float aspect_ratio, 
 		float aperture, 
 		float focus_dist, 
-		float _time0 = 0,
-		float _time1 = 0)
+		float _time0 = 0.0f,
+		float _time1 = 0.0f)
 	{
 		float theta = degrees_to_radians(vfov);
 		float h = tan(theta / 2.0f);
